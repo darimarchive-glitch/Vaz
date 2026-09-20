@@ -30,19 +30,84 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Restore Auralis source
+      - name: Restore and patch Auralis source
         shell: bash
         run: |
           base64 -d .auralis/auralis.zip.b64 > /tmp/auralis.zip
           cd /tmp
           unzip -q auralis.zip
-          test -f /tmp/auralis-reader-1.0.0/pubspec.yaml
+          cd /tmp/auralis-reader-1.0.0
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('pubspec.yaml')
+          p.write_text(p.read_text().replace('  adwaita_gtk: ^1.2.0\n', ''))
+          Path('lib/app.dart').write_text("""import 'package:flutter/material.dart';
+
+          import 'controllers/app_controller.dart';
+          import 'ui/library_page.dart';
+
+          class AuralisApp extends StatelessWidget {
+            const AuralisApp({super.key, required this.controller});
+            final AppController controller;
+
+            ThemeData _theme(Brightness brightness) {
+              final scheme = ColorScheme.fromSeed(
+                seedColor: const Color(0xFF3584E4),
+                brightness: brightness,
+              );
+              return ThemeData(
+                useMaterial3: true,
+                brightness: brightness,
+                colorScheme: scheme,
+                scaffoldBackgroundColor: brightness == Brightness.light
+                    ? const Color(0xFFF6F5F4)
+                    : const Color(0xFF1E1E1E),
+                appBarTheme: AppBarTheme(
+                  centerTitle: false,
+                  elevation: 0,
+                  backgroundColor: brightness == Brightness.light
+                      ? const Color(0xFFF6F5F4)
+                      : const Color(0xFF1E1E1E),
+                ),
+                inputDecorationTheme: InputDecorationTheme(
+                  filled: true,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.all(Radius.circular(12)),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              );
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return AnimatedBuilder(
+                animation: controller,
+                builder: (context, _) => MaterialApp(
+                  title: 'Auralis Reader',
+                  debugShowCheckedModeBanner: false,
+                  theme: _theme(Brightness.light),
+                  darkTheme: _theme(Brightness.dark),
+                  themeMode: controller.settings.themeMode,
+                  home: LibraryPage(controller: controller),
+                ),
+              );
+            }
+          }
+          """)
+          PY
 
       - name: Generate Android runner
         shell: bash
         run: |
           cd /tmp/auralis-reader-1.0.0
           python3 tool/bootstrap.py
+
+      - name: Analyze
+        shell: bash
+        run: |
+          cd /tmp/auralis-reader-1.0.0
+          flutter analyze
 
       - name: Build release APK
         shell: bash
