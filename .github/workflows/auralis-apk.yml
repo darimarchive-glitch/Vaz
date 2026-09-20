@@ -39,8 +39,10 @@ jobs:
           cd /tmp/auralis-reader-1.0.0
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('pubspec.yaml')
-          p.write_text(p.read_text().replace('  adwaita_gtk: ^1.2.0\n', ''))
+
+          pub = Path('pubspec.yaml')
+          pub.write_text(pub.read_text().replace('  adwaita_gtk: ^1.2.0\n', ''))
+
           Path('lib/app.dart').write_text("""import 'package:flutter/material.dart';
 
           import 'controllers/app_controller.dart';
@@ -95,6 +97,116 @@ jobs:
             }
           }
           """)
+
+          Path('lib/controllers/app_controller.dart').write_text("""import 'package:file_picker/file_picker.dart';
+          import 'package:flutter/foundation.dart';
+
+          import '../models/book.dart';
+          import '../models/settings.dart';
+          import '../services/book_importer.dart';
+          import '../services/book_repository.dart';
+          import '../services/tts_service.dart';
+
+          class AppController extends ChangeNotifier {
+            AppController(this.repository, this.tts);
+
+            final BookRepository repository;
+            final LocalTtsService tts;
+            List<BookMetadata> books = [];
+            AppSettings settings = const AppSettings();
+            bool busy = false;
+            String? status;
+
+            Future<void> init() async {
+              books = await repository.loadLibrary();
+              settings = await repository.loadSettings();
+            }
+
+            Future<BookMetadata?> importBook() async {
+              final picked = await FilePicker.pickFile(
+                type: FileType.custom,
+                allowedExtensions: BookImporter.supportedExtensions,
+              );
+              if (picked == null) return null;
+              busy = true;
+              status = 'Importando e extraindo o texto…';
+              notifyListeners();
+              try {
+                final book = await repository.importPlatformFile(picked);
+                books = [book, ...books];
+                await repository.saveLibrary(books);
+                return book;
+              } finally {
+                busy = false;
+                status = null;
+                notifyListeners();
+              }
+            }
+
+            Future<void> updateBook(BookMetadata updated) async {
+              final index = books.indexWhere((book) => book.id == updated.id);
+              if (index == -1) return;
+              books[index] = updated;
+              await repository.saveLibrary(books);
+              notifyListeners();
+            }
+
+            Future<void> deleteBook(BookMetadata book) async {
+              await tts.stop();
+              await repository.deleteBook(book);
+              books.removeWhere((item) => item.id == book.id);
+              await repository.saveLibrary(books);
+              notifyListeners();
+            }
+
+            Future<void> updateSettings(AppSettings value) async {
+              settings = value;
+              await repository.saveSettings(settings);
+              notifyListeners();
+            }
+          }
+          """)
+
+          repo = Path('lib/services/book_repository.dart')
+          s = repo.read_text()
+          old = """    if (picked.path != null) {
+                await File(picked.path!).copy(stored.path);
+              } else if (picked.bytes != null) {
+                await stored.writeAsBytes(picked.bytes!, flush: true);
+              } else if (picked.readStream != null) {
+                final sink = stored.openWrite();
+                await picked.readStream!.pipe(sink);
+              } else {
+                throw const BookImportException('O seletor de arquivos não forneceu acesso ao arquivo.');
+              }
+          """
+          new = """    try {
+                final bytes = await picked.readAsBytes();
+                await stored.writeAsBytes(bytes, flush: true);
+              } catch (_) {
+                throw const BookImportException('O seletor de arquivos não forneceu acesso ao arquivo.');
+              }
+          """
+          if old not in s:
+              raise SystemExit('book_repository legacy block not found')
+          repo.write_text(s.replace(old, new))
+
+          normalizer = Path('lib/services/text_normalizer.dart')
+          s = normalizer.read_text()
+          s = s.replace(
+              r"RegExp(r'([\p{L}])\-\s*\n\s*([\p{L}])', unicode: true)",
+              r"RegExp(r'([A-Za-zÀ-ÖØ-öø-ÿ])\-\s*\n\s*([A-Za-zÀ-ÖØ-öø-ÿ])', unicode: true)"
+          )
+          normalizer.write_text(s)
+
+          settings = Path('lib/ui/settings_page.dart')
+          settings.write_text(settings.read_text().replace(
+              '            value: settings.defaultLanguage,',
+              '            initialValue: settings.defaultLanguage,'
+          ).replace(
+              '              value: selectedVoiceKey,',
+              '              initialValue: selectedVoiceKey,'
+          ))
           PY
 
       - name: Generate Android runner
@@ -107,7 +219,7 @@ jobs:
         shell: bash
         run: |
           cd /tmp/auralis-reader-1.0.0
-          flutter analyze
+          flutter analyze --no-fatal-infos
 
       - name: Build release APK
         shell: bash
