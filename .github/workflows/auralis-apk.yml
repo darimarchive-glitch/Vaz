@@ -1,0 +1,66 @@
+name: Auralis APK
+
+on:
+  push:
+    branches:
+      - ci-auralis-apk-20260920
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Flutter 3.47.5
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.5'
+          channel: stable
+          cache: true
+
+      - name: Restore Auralis source
+        shell: bash
+        run: |
+          base64 -d .auralis/auralis.zip.b64 > /tmp/auralis.zip
+          cd /tmp
+          unzip -q auralis.zip
+          test -f /tmp/auralis-reader-1.0.0/pubspec.yaml
+
+      - name: Generate Android runner
+        shell: bash
+        run: |
+          cd /tmp/auralis-reader-1.0.0
+          python3 tool/bootstrap.py
+
+      - name: Build release APK
+        shell: bash
+        run: |
+          cd /tmp/auralis-reader-1.0.0
+          flutter build apk --release
+          cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/Auralis-Reader-1.0.0.apk"
+
+      - name: Validate APK archive
+        shell: bash
+        run: |
+          unzip -t Auralis-Reader-1.0.0.apk >/dev/null
+          sha256sum Auralis-Reader-1.0.0.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: auralis-reader-1.0.0-apk
+          path: Auralis-Reader-1.0.0.apk
+          if-no-files-found: error
+          retention-days: 1
